@@ -1,0 +1,1065 @@
+<mat-toolbar class="toolbar">
+  <span class="toolbar-title">Report Builder</span>
+  @if (drillThroughStack().length > 0) {
+    <button mat-stroked-button class="drill-back-btn" (click)="drillThroughBack()">
+      <mat-icon>arrow_back</mat-icon>
+      Back to {{ drillThroughStack()[drillThroughStack().length - 1].reportName }}
+    </button>
+  }
+  @if (currentReportName()) {
+    <span class="current-report-badge">{{ currentReportName() }}</span>
+  }
+  <span class="spacer"></span>
+  <button mat-icon-button (click)="newReport()" matTooltip="New Report">
+    <mat-icon>note_add</mat-icon>
+  </button>
+  <button mat-icon-button (click)="openLoadDialog()" matTooltip="Load Report">
+    <mat-icon>folder_open</mat-icon>
+  </button>
+  <button mat-icon-button (click)="quickSave()" matTooltip="Save" [disabled]="!selectedFields().length">
+    <mat-icon>save</mat-icon>
+  </button>
+  <button mat-icon-button (click)="openSaveDialog()" matTooltip="Save As..." [disabled]="!selectedFields().length">
+    <mat-icon>save_as</mat-icon>
+  </button>
+  <mat-form-field class="title-field" subscriptSizing="dynamic">
+    <input matInput placeholder="Report Title" [ngModel]="reportTitle()" (ngModelChange)="reportTitle.set($event)" />
+  </mat-form-field>
+</mat-toolbar>
+
+<div class="builder-layout">
+  <!-- LEFT: Config Panel -->
+  <div class="config-panel">
+    <!-- Module & Entity Selection -->
+    <mat-card>
+      <mat-card-content>
+        <div class="row">
+          <mat-form-field class="flex-1">
+            <mat-label>Module</mat-label>
+            <mat-select [ngModel]="selectedModuleId()" (ngModelChange)="onModuleChange($event)">
+              @for (m of modules(); track m.moduleId) {
+                <mat-option [value]="m.moduleId">{{ m.moduleName }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+
+          <mat-form-field class="flex-1">
+            <mat-label>Entity</mat-label>
+            <mat-select [ngModel]="selectedEntityId()" (ngModelChange)="onEntityChange($event)"
+                        [disabled]="!selectedModuleId()">
+              @for (e of entities(); track e.entityId) {
+                <mat-option [value]="e.entityId">{{ e.entityName }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        </div>
+      </mat-card-content>
+    </mat-card>
+
+    <!-- Field Selection -->
+    @if (fieldSelections().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Fields</mat-card-title>
+          <mat-card-subtitle>{{ selectedFields().length }} selected</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          @for (entry of fieldCategories() | keyvalue; track entry.key) {
+            <mat-expansion-panel>
+              <mat-expansion-panel-header>
+                <mat-panel-title>{{ entry.key }}</mat-panel-title>
+                <mat-panel-description>{{ entry.value.length }} fields</mat-panel-description>
+              </mat-expansion-panel-header>
+
+              @for (fs of entry.value; track fs.field.fieldId) {
+                <div class="field-row">
+                  <mat-checkbox [checked]="fs.selected"
+                                (change)="toggleFieldSelected(fs.field.fieldId)"
+                                class="field-checkbox">
+                    <span [matTooltip]="fs.field.description || ''">
+                      {{ fs.field.displayLabel }}
+                    </span>
+                    @if (fs.field.isComputed) {
+                      <mat-icon class="computed-icon" matTooltip="Computed field">functions</mat-icon>
+                    }
+                    <span class="field-type">{{ fs.field.dataType }}</span>
+                  </mat-checkbox>
+
+                  @if (fs.selected && fs.field.allowedAggregations.length > 0) {
+                    <mat-form-field class="agg-select" subscriptSizing="dynamic">
+                      <mat-select [value]="fs.aggregate"
+                                  (selectionChange)="setFieldAggregate(fs.field.fieldId, $event.value)">
+                        @for (agg of AGGREGATION_OPTIONS; track agg.value) {
+                          @if (!agg.value || fs.field.allowedAggregations.includes(agg.value)) {
+                            <mat-option [value]="agg.value">{{ agg.label }}</mat-option>
+                          }
+                        }
+                      </mat-select>
+                    </mat-form-field>
+                  }
+
+                  @if (fs.selected && (fs.field.dataType === 'Number' || fs.field.dataType === 'Date')) {
+                    <mat-form-field class="fmt-select" subscriptSizing="dynamic">
+                      <mat-select [value]="fs.formatPattern"
+                                  (selectionChange)="setFieldFormatPattern(fs.field.fieldId, $event.value)">
+                        @for (fmt of getFormatOptionsForField(fs.field.dataType); track fmt.value) {
+                          <mat-option [value]="fmt.value">{{ fmt.label }}</mat-option>
+                        }
+                      </mat-select>
+                    </mat-form-field>
+                  }
+
+                  @if (fs.selected && fs.field.isGroupable) {
+                    <mat-checkbox [checked]="fs.grouped"
+                                  (change)="toggleFieldGrouped(fs.field.fieldId)"
+                                  class="group-checkbox">
+                      Group
+                    </mat-checkbox>
+                  }
+                </div>
+              }
+            </mat-expansion-panel>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Joins -->
+    @if (relationships().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Joins</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+          @for (join of joins(); track join.relationship.relationshipId; let i = $index) {
+            <div class="join-block">
+              <div class="join-header">
+                <mat-form-field class="join-type-select" subscriptSizing="dynamic">
+                  <mat-select [(ngModel)]="join.joinType">
+                    <mat-option value="left">LEFT JOIN</mat-option>
+                    <mat-option value="inner">INNER JOIN</mat-option>
+                    <mat-option value="right">RIGHT JOIN</mat-option>
+                  </mat-select>
+                </mat-form-field>
+                <span class="join-entity-name">{{ join.entity.entityName }}</span>
+                <button mat-icon-button (click)="removeJoin(i)" color="warn">
+                  <mat-icon>close</mat-icon>
+                </button>
+              </div>
+              <div class="join-fields">
+                @for (f of join.fields; track f.fieldId) {
+                  <mat-checkbox [checked]="join.selectedFieldIds.includes(f.fieldId)"
+                                (change)="toggleJoinField(i, f.fieldId)">
+                    {{ f.displayLabel }}
+                  </mat-checkbox>
+                }
+              </div>
+            </div>
+          }
+
+          @if (availableRelationships().length > 0) {
+            <mat-form-field class="full-width" subscriptSizing="dynamic">
+              <mat-label>Add Join...</mat-label>
+              <mat-select (selectionChange)="addJoin($event.value); $event.source.value = null">
+                @for (r of availableRelationships(); track r.relationshipId) {
+                  <mat-option [value]="r">
+                    {{ r.primaryEntityName }} &#8596; {{ r.foreignEntityName }}
+                    ({{ r.primaryJoinField }} = {{ r.foreignJoinField }})
+                  </mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Filters -->
+    @if (selectedEntityId()) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Filters</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+          @if (filters().length > 1) {
+            <div class="logic-toggle">
+              <mat-form-field subscriptSizing="dynamic">
+                <mat-label>Logic</mat-label>
+                <mat-select [ngModel]="filterLogic()" (ngModelChange)="filterLogic.set($event)">
+                  <mat-option value="and">AND</mat-option>
+                  <mat-option value="or">OR</mat-option>
+                </mat-select>
+              </mat-form-field>
+            </div>
+          }
+
+          @for (filter of filters(); track $index; let i = $index) {
+            <div class="filter-row">
+              <mat-form-field class="filter-field" subscriptSizing="dynamic">
+                <mat-select [(ngModel)]="filter.fieldId">
+                  @for (f of filterableFields(); track f.fieldId) {
+                    <mat-option [value]="f.fieldId">{{ f.displayLabel }}</mat-option>
+                  }
+                  @for (j of joins(); track j.relationship.relationshipId) {
+                    @for (f of j.fields; track f.fieldId) {
+                      @if (f.isFilterable) {
+                        <mat-option [value]="f.fieldId">{{ j.entity.entityName }}.{{ f.displayLabel }}</mat-option>
+                      }
+                    }
+                  }
+                </mat-select>
+              </mat-form-field>
+
+              <mat-form-field class="filter-op" subscriptSizing="dynamic">
+                <mat-select [(ngModel)]="filter.operator">
+                  @for (op of getOperatorsForField(filter.fieldId); track op.value) {
+                    <mat-option [value]="op.value">{{ op.label }}</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+
+              @if (filter.operator === 'relative') {
+                <mat-form-field class="filter-value" subscriptSizing="dynamic">
+                  <mat-select [(ngModel)]="filter.value">
+                    @for (preset of RELATIVE_DATE_PRESETS; track preset.label) {
+                      <mat-option [value]="preset.label">{{ preset.label }}</mat-option>
+                    }
+                  </mat-select>
+                </mat-form-field>
+              } @else if (filter.operator !== 'isnull' && filter.operator !== 'isnotnull') {
+                <mat-form-field class="filter-value" subscriptSizing="dynamic">
+                  <input matInput [(ngModel)]="filter.value" placeholder="Value" />
+                </mat-form-field>
+              }
+
+              <button mat-icon-button (click)="removeFilter(i)" color="warn">
+                <mat-icon>remove_circle</mat-icon>
+              </button>
+            </div>
+          }
+
+          <button mat-stroked-button (click)="addFilter()" [disabled]="filterableFields().length === 0">
+            <mat-icon>add</mat-icon> Add Filter
+          </button>
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Sorting -->
+    @if (selectedFields().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Sorting</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+          @for (sort of sortings(); track $index; let i = $index) {
+            <div class="sort-row">
+              <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                <mat-select [(ngModel)]="sort.fieldId">
+                  @for (f of sortableFields(); track f.fieldId) {
+                    <mat-option [value]="f.fieldId">{{ f.displayLabel }}</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+              <mat-form-field subscriptSizing="dynamic">
+                <mat-select [(ngModel)]="sort.direction">
+                  <mat-option value="ASC">ASC</mat-option>
+                  <mat-option value="DESC">DESC</mat-option>
+                </mat-select>
+              </mat-form-field>
+              <button mat-icon-button (click)="removeSorting(i)" color="warn">
+                <mat-icon>remove_circle</mat-icon>
+              </button>
+            </div>
+          }
+          <button mat-stroked-button (click)="addSorting()" [disabled]="sortableFields().length === 0">
+            <mat-icon>add</mat-icon> Add Sort
+          </button>
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Query Options: DISTINCT & Top-N -->
+    @if (selectedFields().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Query Options</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+          <mat-checkbox [ngModel]="distinctEnabled()" (ngModelChange)="distinctEnabled.set($event)">
+            Distinct results only
+          </mat-checkbox>
+
+          <mat-divider class="query-option-divider"></mat-divider>
+
+          <mat-checkbox [ngModel]="topNEnabled()" (ngModelChange)="topNEnabled.set($event)">
+            Top-N / Bottom-N
+          </mat-checkbox>
+
+          @if (topNEnabled()) {
+            <div class="topn-config">
+              <mat-form-field class="topn-count" subscriptSizing="dynamic">
+                <mat-label>Count</mat-label>
+                <input matInput type="number" [ngModel]="topNCount()" (ngModelChange)="topNCount.set($event)" min="1" max="1000" />
+              </mat-form-field>
+              <mat-form-field class="topn-direction" subscriptSizing="dynamic">
+                <mat-label>Direction</mat-label>
+                <mat-select [ngModel]="topNDirection()" (ngModelChange)="topNDirection.set($event)">
+                  <mat-option value="top">Top (highest)</mat-option>
+                  <mat-option value="bottom">Bottom (lowest)</mat-option>
+                </mat-select>
+              </mat-form-field>
+              <mat-form-field class="topn-field" subscriptSizing="dynamic">
+                <mat-label>By Field</mat-label>
+                <mat-select [ngModel]="topNFieldId()" (ngModelChange)="topNFieldId.set($event)">
+                  @for (f of selectedFields(); track f.field.fieldId) {
+                    <mat-option [value]="f.field.fieldId">{{ f.field.displayLabel }}</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+            </div>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- HAVING Filters (post-aggregation) -->
+    @if (hasGroupings() && aggregatedFields().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Having Filters</mat-card-title>
+          <mat-card-subtitle>Post-aggregation conditions</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          @if (havingFilters().length > 1) {
+            <div class="logic-toggle">
+              <mat-form-field subscriptSizing="dynamic">
+                <mat-label>Logic</mat-label>
+                <mat-select [ngModel]="havingLogic()" (ngModelChange)="havingLogic.set($event)">
+                  <mat-option value="and">AND</mat-option>
+                  <mat-option value="or">OR</mat-option>
+                </mat-select>
+              </mat-form-field>
+            </div>
+          }
+
+          @for (hf of havingFilters(); track $index; let i = $index) {
+            <div class="filter-row">
+              <mat-form-field class="filter-field" subscriptSizing="dynamic">
+                <mat-select [(ngModel)]="hf.fieldId">
+                  @for (f of aggregatedFields(); track f.fieldId) {
+                    <mat-option [value]="f.fieldId">{{ f.displayLabel }}</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+
+              <mat-form-field class="filter-op" subscriptSizing="dynamic">
+                <mat-select [(ngModel)]="hf.operator">
+                  <mat-option value="gt">Greater Than</mat-option>
+                  <mat-option value="gte">Greater or Equal</mat-option>
+                  <mat-option value="lt">Less Than</mat-option>
+                  <mat-option value="lte">Less or Equal</mat-option>
+                  <mat-option value="eq">Equals</mat-option>
+                  <mat-option value="neq">Not Equals</mat-option>
+                  <mat-option value="between">Between</mat-option>
+                </mat-select>
+              </mat-form-field>
+
+              <mat-form-field class="filter-value" subscriptSizing="dynamic">
+                <input matInput [(ngModel)]="hf.value" placeholder="Value" />
+              </mat-form-field>
+
+              <button mat-icon-button (click)="removeHavingFilter(i)" color="warn">
+                <mat-icon>remove_circle</mat-icon>
+              </button>
+            </div>
+          }
+
+          <button mat-stroked-button (click)="addHavingFilter()">
+            <mat-icon>add</mat-icon> Add Having Filter
+          </button>
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Parameters -->
+    @if (selectedEntityId()) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Parameters</mat-card-title>
+          <mat-card-subtitle>{{ parameters().length }} defined</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          @for (param of parameters(); track $index; let i = $index) {
+            <div class="param-row">
+              <mat-form-field class="param-id" subscriptSizing="dynamic">
+                <mat-label>ID</mat-label>
+                <input matInput [ngModel]="param.paramId" (ngModelChange)="updateParameter(i, 'paramId', $event)" />
+              </mat-form-field>
+              <mat-form-field class="param-label" subscriptSizing="dynamic">
+                <mat-label>Label</mat-label>
+                <input matInput [ngModel]="param.label" (ngModelChange)="updateParameter(i, 'label', $event)" />
+              </mat-form-field>
+              <mat-form-field class="param-type" subscriptSizing="dynamic">
+                <mat-label>Type</mat-label>
+                <mat-select [ngModel]="param.dataType" (ngModelChange)="updateParameter(i, 'dataType', $event)">
+                  <mat-option value="String">String</mat-option>
+                  <mat-option value="Number">Number</mat-option>
+                  <mat-option value="Date">Date</mat-option>
+                  <mat-option value="Boolean">Boolean</mat-option>
+                </mat-select>
+              </mat-form-field>
+              <mat-form-field class="param-default" subscriptSizing="dynamic">
+                <mat-label>Default</mat-label>
+                <input matInput [ngModel]="param.defaultValue" (ngModelChange)="updateParameter(i, 'defaultValue', $event)" />
+              </mat-form-field>
+              <button mat-icon-button (click)="removeParameter(i)" color="warn">
+                <mat-icon>remove_circle</mat-icon>
+              </button>
+            </div>
+          }
+          <button mat-stroked-button (click)="addParameter()">
+            <mat-icon>add</mat-icon> Add Parameter
+          </button>
+          @if (parameters().length > 0) {
+            <div class="param-hint">
+              Use <code>&#64;paramId</code> as a filter value to reference parameters.
+            </div>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Conditional Formatting -->
+    @if (previewColumns().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Conditional Formatting</mat-card-title>
+          <mat-card-subtitle>{{ conditionalFormats().length }} rules</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          @for (rule of conditionalFormats(); track $index; let i = $index) {
+            <div class="cond-format-rule">
+              <div class="cond-format-row">
+                <mat-form-field class="cond-col" subscriptSizing="dynamic">
+                  <mat-label>Column</mat-label>
+                  <mat-select [value]="rule.targetColumn"
+                              (selectionChange)="updateConditionalFormat(i, 'targetColumn', $event.value)">
+                    @for (col of previewColumns(); track col) {
+                      <mat-option [value]="col">{{ col }}</mat-option>
+                    }
+                  </mat-select>
+                </mat-form-field>
+                <mat-form-field class="cond-op" subscriptSizing="dynamic">
+                  <mat-label>Operator</mat-label>
+                  <mat-select [value]="rule.operator"
+                              (selectionChange)="updateConditionalFormat(i, 'operator', $event.value)">
+                    <mat-option value="gt">Greater Than</mat-option>
+                    <mat-option value="gte">Greater or Equal</mat-option>
+                    <mat-option value="lt">Less Than</mat-option>
+                    <mat-option value="lte">Less or Equal</mat-option>
+                    <mat-option value="eq">Equals</mat-option>
+                    <mat-option value="neq">Not Equals</mat-option>
+                    <mat-option value="between">Between</mat-option>
+                    <mat-option value="contains">Contains</mat-option>
+                  </mat-select>
+                </mat-form-field>
+                <button mat-icon-button (click)="removeConditionalFormat(i)" color="warn">
+                  <mat-icon>close</mat-icon>
+                </button>
+              </div>
+              <div class="cond-format-row">
+                <mat-form-field class="cond-value" subscriptSizing="dynamic">
+                  <mat-label>Value</mat-label>
+                  <input matInput [value]="rule.value"
+                         (input)="updateConditionalFormat(i, 'value', $any($event.target).value)" />
+                </mat-form-field>
+                @if (rule.operator === 'between') {
+                  <mat-form-field class="cond-value" subscriptSizing="dynamic">
+                    <mat-label>Value 2</mat-label>
+                    <input matInput [value]="rule.value2 || ''"
+                           (input)="updateConditionalFormat(i, 'value2', $any($event.target).value)" />
+                  </mat-form-field>
+                }
+                <mat-form-field class="cond-color" subscriptSizing="dynamic">
+                  <mat-label>Background</mat-label>
+                  <input matInput type="color" [value]="rule.backgroundColor || '#ffebee'"
+                         (input)="updateConditionalFormat(i, 'backgroundColor', $any($event.target).value)" />
+                </mat-form-field>
+                <mat-form-field class="cond-color" subscriptSizing="dynamic">
+                  <mat-label>Text</mat-label>
+                  <input matInput type="color" [value]="rule.textColor || '#000000'"
+                         (input)="updateConditionalFormat(i, 'textColor', $any($event.target).value)" />
+                </mat-form-field>
+              </div>
+            </div>
+          }
+          <button mat-stroked-button (click)="addConditionalFormat()">
+            <mat-icon>format_paint</mat-icon> Add Rule
+          </button>
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Layout Type -->
+    @if (selectedFields().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Layout</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+          <mat-button-toggle-group [value]="layoutType()"
+                                   (change)="layoutType.set($event.value)"
+                                   class="layout-toggle">
+            <mat-button-toggle value="Table">
+              <mat-icon>table_chart</mat-icon> Table
+            </mat-button-toggle>
+            <mat-button-toggle value="Chart">
+              <mat-icon>bar_chart</mat-icon> Chart
+            </mat-button-toggle>
+            <mat-button-toggle value="ChartAndTable">
+              <mat-icon>dashboard</mat-icon> Both
+            </mat-button-toggle>
+          </mat-button-toggle-group>
+
+          <div class="orientation-section">
+            <label class="orientation-label">PDF Orientation</label>
+            <mat-button-toggle-group [value]="orientation()"
+                                     (change)="orientation.set($event.value)"
+                                     class="orientation-toggle">
+              <mat-button-toggle value="Portrait">
+                <mat-icon>crop_portrait</mat-icon> Portrait
+              </mat-button-toggle>
+              <mat-button-toggle value="Landscape">
+                <mat-icon>crop_landscape</mat-icon> Landscape
+              </mat-button-toggle>
+            </mat-button-toggle-group>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Chart Config (when chart is visible) -->
+    @if ((layoutType() === 'Chart' || layoutType() === 'ChartAndTable') && selectedFields().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Chart Settings</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="chart-type-grid">
+            @for (ct of CHART_TYPES; track ct.value) {
+              <button mat-stroked-button
+                      [class.active]="chartType() === ct.value"
+                      (click)="chartType.set(ct.value)">
+                <mat-icon>{{ ct.icon }}</mat-icon>
+                {{ ct.label }}
+              </button>
+            }
+          </div>
+
+          @if (previewResult() && previewResult()!.data.length > 0) {
+            <mat-form-field class="full-width" subscriptSizing="dynamic">
+              <mat-label>Label Field (X-Axis / Categories)</mat-label>
+              <mat-select [ngModel]="chartLabelField()" (ngModelChange)="chartLabelField.set($event)">
+                @for (col of previewColumns(); track col) {
+                  <mat-option [value]="col">{{ col }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <div class="chart-data-fields">
+              <label class="data-fields-label">Data Fields (Y-Axis / Values)</label>
+              @for (col of numericColumns(); track col) {
+                <mat-checkbox [checked]="chartDataFields().includes(col)"
+                              (change)="toggleChartDataField(col)">
+                  {{ col }}
+                </mat-checkbox>
+              }
+              @if (numericColumns().length === 0) {
+                <span class="hint">No numeric columns available. Run a preview with numeric fields first.</span>
+              }
+            </div>
+
+            <button mat-stroked-button (click)="autoConfigureChart()" class="auto-config-btn">
+              <mat-icon>auto_fix_high</mat-icon> Auto Configure
+            </button>
+          } @else {
+            <span class="hint">Run a preview first to configure chart fields.</span>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Dashboard Layout -->
+    @if (previewResult() && previewResult()!.data.length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Dashboard Layout</mat-card-title>
+          <mat-card-subtitle>{{ dashboardWidgets().length }} widgets</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <mat-checkbox [ngModel]="dashboardEnabled()" (ngModelChange)="dashboardEnabled.set($event)">
+            Enable dashboard grid
+          </mat-checkbox>
+
+          @if (dashboardEnabled()) {
+            <div class="dashboard-columns-row">
+              <mat-form-field class="dashboard-col-field" subscriptSizing="dynamic">
+                <mat-label>Grid Columns</mat-label>
+                <mat-select [ngModel]="dashboardColumns()" (ngModelChange)="dashboardColumns.set($event)">
+                  <mat-option [value]="1">1 Column</mat-option>
+                  <mat-option [value]="2">2 Columns</mat-option>
+                  <mat-option [value]="3">3 Columns</mat-option>
+                  <mat-option [value]="4">4 Columns</mat-option>
+                </mat-select>
+              </mat-form-field>
+            </div>
+
+            @for (widget of dashboardWidgets(); track widget.id; let i = $index) {
+              <div class="dashboard-widget-config">
+                <div class="dashboard-widget-header">
+                  <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                    <mat-label>Title</mat-label>
+                    <input matInput [value]="widget.title"
+                           (input)="updateDashboardWidget(widget.id, 'title', $any($event.target).value)" />
+                  </mat-form-field>
+                  <mat-form-field subscriptSizing="dynamic">
+                    <mat-label>Type</mat-label>
+                    <mat-select [value]="widget.type"
+                                (selectionChange)="updateDashboardWidget(widget.id, 'type', $event.value)">
+                      <mat-option value="Grid">Table</mat-option>
+                      <mat-option value="Bar">Bar Chart</mat-option>
+                      <mat-option value="Line">Line Chart</mat-option>
+                      <mat-option value="Pie">Pie Chart</mat-option>
+                      <mat-option value="Doughnut">Doughnut</mat-option>
+                    </mat-select>
+                  </mat-form-field>
+                  <mat-form-field class="span-field" subscriptSizing="dynamic">
+                    <mat-label>Span</mat-label>
+                    <mat-select [value]="dashboardLayout()[i]?.colSpan || 1"
+                                (selectionChange)="updateLayoutItem(widget.id, 'colSpan', $event.value)">
+                      @for (s of [1,2,3,4]; track s) {
+                        @if (s <= dashboardColumns()) {
+                          <mat-option [value]="s">{{ s }}</mat-option>
+                        }
+                      }
+                    </mat-select>
+                  </mat-form-field>
+                  <button mat-icon-button (click)="removeDashboardWidget(widget.id)" color="warn">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </div>
+                @if (widget.type !== 'Grid') {
+                  <div class="dashboard-widget-chart-config">
+                    <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                      <mat-label>X-Axis</mat-label>
+                      <mat-select [value]="widget.xAxisField"
+                                  (selectionChange)="updateDashboardWidget(widget.id, 'xAxisField', $event.value)">
+                        @for (col of previewColumns(); track col) {
+                          <mat-option [value]="col">{{ col }}</mat-option>
+                        }
+                      </mat-select>
+                    </mat-form-field>
+                    <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                      <mat-label>Y-Axis</mat-label>
+                      <mat-select [value]="widget.yAxisFields || []" multiple
+                                  (selectionChange)="updateDashboardWidget(widget.id, 'yAxisFields', $event.value)">
+                        @for (col of numericColumns(); track col) {
+                          <mat-option [value]="col">{{ col }}</mat-option>
+                        }
+                      </mat-select>
+                    </mat-form-field>
+                  </div>
+                }
+              </div>
+            }
+
+            <div class="dashboard-add-buttons">
+              <button mat-stroked-button (click)="addDashboardWidget('Grid')">
+                <mat-icon>table_chart</mat-icon> Add Table
+              </button>
+              <button mat-stroked-button (click)="addDashboardWidget('Bar')">
+                <mat-icon>bar_chart</mat-icon> Add Chart
+              </button>
+            </div>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Drill-Through -->
+    @if (previewColumns().length > 0) {
+      <mat-card>
+        <mat-card-header>
+          <mat-card-title>Drill-Through</mat-card-title>
+          <mat-card-subtitle>{{ drillThroughConfigs().length }} links</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          @for (dt of drillThroughConfigs(); track $index; let i = $index) {
+            <div class="drill-through-config">
+              <div class="drill-through-row">
+                <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                  <mat-label>Source Column</mat-label>
+                  <mat-select [value]="dt.sourceColumn"
+                              (selectionChange)="updateDrillThrough(i, 'sourceColumn', $event.value)">
+                    @for (col of previewColumns(); track col) {
+                      <mat-option [value]="col">{{ col }}</mat-option>
+                    }
+                  </mat-select>
+                </mat-form-field>
+                <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                  <mat-label>Target Report</mat-label>
+                  <input matInput [value]="dt.targetReportName || dt.targetReportId" readonly
+                         placeholder="Click Browse..." />
+                </mat-form-field>
+                <button mat-stroked-button (click)="selectDrillThroughTarget(i)">
+                  <mat-icon>search</mat-icon>
+                </button>
+                <button mat-icon-button (click)="removeDrillThrough(i)" color="warn">
+                  <mat-icon>close</mat-icon>
+                </button>
+              </div>
+              @if (dt.targetReportId) {
+                <div class="drill-through-mappings">
+                  <label class="data-fields-label">Parameter Mappings</label>
+                  @for (mapping of dt.parameterMappings; track $index; let mi = $index) {
+                    <div class="drill-through-mapping-row">
+                      <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                        <mat-label>Target Param ID</mat-label>
+                        <input matInput [value]="mapping.targetParamId"
+                               (input)="updateDrillThroughMapping(i, mi, 'targetParamId', $any($event.target).value)" />
+                      </mat-form-field>
+                      <mat-icon class="mapping-arrow">arrow_forward</mat-icon>
+                      <mat-form-field class="flex-1" subscriptSizing="dynamic">
+                        <mat-label>Source Column</mat-label>
+                        <mat-select [value]="mapping.sourceColumn"
+                                    (selectionChange)="updateDrillThroughMapping(i, mi, 'sourceColumn', $event.value)">
+                          @for (col of previewColumns(); track col) {
+                            <mat-option [value]="col">{{ col }}</mat-option>
+                          }
+                        </mat-select>
+                      </mat-form-field>
+                      <button mat-icon-button (click)="removeDrillThroughMapping(i, mi)" color="warn">
+                        <mat-icon>close</mat-icon>
+                      </button>
+                    </div>
+                  }
+                  <button mat-stroked-button (click)="addDrillThroughMapping(i)">
+                    <mat-icon>add</mat-icon> Add Mapping
+                  </button>
+                </div>
+              }
+            </div>
+          }
+          <button mat-stroked-button (click)="addDrillThrough()">
+            <mat-icon>open_in_new</mat-icon> Add Drill-Through Link
+          </button>
+          @if (drillThroughConfigs().length > 0) {
+            <div class="param-hint">
+              Click a linked cell in the data table to navigate to the target report with mapped parameter values.
+            </div>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+
+    <!-- Preview Button -->
+    @if (selectedFields().length > 0) {
+      <button mat-flat-button color="primary" class="preview-btn" (click)="runPreview()" [disabled]="loading()">
+        @if (loading()) {
+          <mat-spinner diameter="20"></mat-spinner>
+        } @else {
+          <mat-icon>play_arrow</mat-icon>
+        }
+        Run Preview
+      </button>
+    }
+  </div>
+
+  <!-- RIGHT: Results Panel -->
+  <div class="results-panel">
+    @if (errorMessage()) {
+      <mat-card class="error-card">
+        <mat-card-content>
+          <mat-icon color="warn">error</mat-icon>
+          <span>{{ errorMessage() }}</span>
+        </mat-card-content>
+      </mat-card>
+    }
+
+    @if (previewResult()) {
+      <!-- Results Header with Export -->
+      <mat-card class="results-header-card">
+        <mat-card-content class="results-header">
+          <div class="results-meta">
+            <strong>Results</strong>
+            <span class="meta-text">
+              {{ previewResult()!.totalCount }} rows &middot;
+              {{ previewResult()!.executionTimeMs }}ms
+              @if (previewResult()!.truncated) {
+                &middot; <span class="truncated-badge">Truncated</span>
+              }
+            </span>
+          </div>
+          <div class="export-actions">
+            <button mat-stroked-button (click)="exportCsv()" matTooltip="Export as CSV">
+              <mat-icon>description</mat-icon> CSV
+            </button>
+            <button mat-stroked-button (click)="exportExcel()" matTooltip="Export as Excel">
+              <mat-icon>grid_on</mat-icon> Excel
+            </button>
+            <button mat-stroked-button (click)="exportPdf()" matTooltip="Export as PDF">
+              <mat-icon>picture_as_pdf</mat-icon> PDF
+            </button>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      @if (!dashboardEnabled()) {
+        <!-- Chart Visualization -->
+        @if ((layoutType() === 'Chart' || layoutType() === 'ChartAndTable') && chartConfig()) {
+          <mat-card>
+            <mat-card-content class="chart-container">
+              <canvas #chartCanvas baseChart
+                      [type]="chartConfig()!.type"
+                      [data]="chartConfig()!.data"
+                      [options]="chartConfig()!.options">
+              </canvas>
+            </mat-card-content>
+          </mat-card>
+        }
+
+        <!-- Data Table -->
+        @if (layoutType() === 'Table' || layoutType() === 'ChartAndTable') {
+          <mat-card>
+            <mat-card-content>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      @for (col of previewColumns(); track col) {
+                        <th>{{ col }}</th>
+                      }
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (row of previewResult()!.data; track $index) {
+                      <tr>
+                        @for (col of previewColumns(); track col) {
+                          <td [ngStyle]="getCellStyle(row[col], col)"
+                            [class.drillable]="!!getDrillThroughForColumn(col)"
+                            (click)="onCellClick(row, col)">{{ formatCellValue(row[col], col) }}</td>
+                        }
+                      </tr>
+                    }
+                    @if (previewResult()!.data.length === 0) {
+                      <tr>
+                        <td [attr.colspan]="previewColumns().length" class="empty-row">
+                          No matching records found.
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </mat-card-content>
+          </mat-card>
+        }
+      }
+
+      <!-- Dashboard Grid -->
+      @if (dashboardEnabled() && dashboardWidgets().length > 0) {
+        <div class="dashboard-grid" [style.grid-template-columns]="'repeat(' + dashboardColumns() + ', 1fr)'">
+          @for (widget of dashboardWidgets(); track widget.id; let i = $index) {
+            <mat-card class="dashboard-widget"
+                      [style.grid-column]="'span ' + (dashboardLayout()[i]?.colSpan || 1)">
+              <mat-card-header>
+                <mat-card-title>{{ widget.title }}</mat-card-title>
+              </mat-card-header>
+              <mat-card-content>
+                @if (widget.type === 'Grid') {
+                  <div class="table-container">
+                    <table>
+                      <thead>
+                        <tr>
+                          @for (col of previewColumns(); track col) {
+                            <th>{{ col }}</th>
+                          }
+                        </tr>
+                      </thead>
+                      <tbody>
+                        @for (row of previewResult()!.data; track $index) {
+                          <tr>
+                            @for (col of previewColumns(); track col) {
+                              <td [ngStyle]="getCellStyle(row[col], col)"
+                            [class.drillable]="!!getDrillThroughForColumn(col)"
+                            (click)="onCellClick(row, col)">{{ formatCellValue(row[col], col) }}</td>
+                            }
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                } @else {
+                  @if (getWidgetChartConfig(widget); as wChartCfg) {
+                    <div class="chart-container">
+                      <canvas baseChart
+                              [type]="wChartCfg.type"
+                              [data]="wChartCfg.data"
+                              [options]="wChartCfg.options">
+                      </canvas>
+                    </div>
+                  } @else {
+                    <span class="hint">Configure X-Axis and Y-Axis fields for this chart.</span>
+                  }
+                }
+              </mat-card-content>
+            </mat-card>
+          }
+        </div>
+      }
+    }
+
+    @if (!previewResult() && !errorMessage()) {
+      <div class="empty-state">
+        <mat-icon>assessment</mat-icon>
+        <p>Select a module and entity, pick fields, then click <strong>Run Preview</strong>.</p>
+      </div>
+    }
+  </div>
+</div>
+
+<!-- Save Dialog Template -->
+<ng-template #saveDialogTpl>
+  <h2 mat-dialog-title>{{ saveDialogIsTemplate() ? 'Save as Template' : 'Save Report' }}</h2>
+  <mat-dialog-content>
+    <mat-form-field class="dialog-full-width">
+      <mat-label>{{ saveDialogIsTemplate() ? 'Template Name' : 'Report Name' }}</mat-label>
+      <input matInput [ngModel]="saveDialogName()" (ngModelChange)="saveDialogName.set($event)" />
+    </mat-form-field>
+    <mat-form-field class="dialog-full-width">
+      <mat-label>Description</mat-label>
+      <textarea matInput [ngModel]="saveDialogDescription()" (ngModelChange)="saveDialogDescription.set($event)" rows="3"></textarea>
+    </mat-form-field>
+    <div class="dialog-checkboxes">
+      <mat-checkbox [checked]="saveDialogIsTemplate()" (change)="saveDialogIsTemplate.set($event.checked)">
+        Save as template
+      </mat-checkbox>
+      @if (!saveDialogIsTemplate()) {
+        <mat-checkbox [checked]="saveDialogIsShared()" (change)="saveDialogIsShared.set($event.checked)">
+          Share with other users
+        </mat-checkbox>
+      }
+    </div>
+    @if (saveDialogIsTemplate()) {
+      <div class="template-hint">
+        Templates are available to all users. They can create their own report from this template.
+      </div>
+    }
+  </mat-dialog-content>
+  <mat-dialog-actions align="end">
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-flat-button color="primary" [mat-dialog-close]="'save'" [disabled]="!saveDialogName()">
+      {{ saveDialogIsTemplate() ? 'Save Template' : 'Save' }}
+    </button>
+  </mat-dialog-actions>
+</ng-template>
+
+<!-- Load Dialog Template -->
+<ng-template #loadDialogTpl>
+  <h2 mat-dialog-title>Load Report</h2>
+  <mat-dialog-content>
+    <mat-tab-group [(selectedIndex)]="loadDialogTabIndex"
+                   (selectedIndexChange)="loadDialogTab.set($event === 0 ? 'reports' : 'templates')">
+      <mat-tab label="My Reports">
+        @if (loadingReports()) {
+          <div class="dialog-loading">
+            <mat-spinner diameter="32"></mat-spinner>
+            <span>Loading reports...</span>
+          </div>
+        } @else if (savedReports().length === 0) {
+          <div class="dialog-empty">No saved reports found.</div>
+        } @else {
+          <div class="saved-reports-list">
+            @for (report of savedReports(); track report.reportId) {
+              <div class="saved-report-item" [class.active]="currentReportId() === report.reportId">
+                <div class="saved-report-info" (click)="loadReport(report.reportId)">
+                  <div class="saved-report-name">
+                    {{ report.name }}
+                    @if (report.isShared) {
+                      <mat-icon class="shared-icon" matTooltip="Shared">people</mat-icon>
+                    }
+                  </div>
+                  @if (report.description) {
+                    <div class="saved-report-desc">{{ report.description }}</div>
+                  }
+                  <div class="saved-report-meta">
+                    Modified: {{ report.modifiedAt | date:'short' }}
+                  </div>
+                </div>
+                <button mat-icon-button (click)="deleteReport(report.reportId)" color="warn" matTooltip="Delete">
+                  <mat-icon>delete</mat-icon>
+                </button>
+              </div>
+            }
+          </div>
+        }
+      </mat-tab>
+
+      <mat-tab label="Templates">
+        @if (loadingTemplates()) {
+          <div class="dialog-loading">
+            <mat-spinner diameter="32"></mat-spinner>
+            <span>Loading templates...</span>
+          </div>
+        } @else if (templates().length === 0) {
+          <div class="dialog-empty">No templates available.</div>
+        } @else {
+          <div class="saved-reports-list">
+            @for (tpl of templates(); track tpl.reportId) {
+              <div class="saved-report-item template-item">
+                <div class="saved-report-info" (click)="cloneTemplate(tpl.reportId)">
+                  <div class="saved-report-name">
+                    <mat-icon class="template-icon">content_copy</mat-icon>
+                    {{ tpl.name }}
+                  </div>
+                  @if (tpl.description) {
+                    <div class="saved-report-desc">{{ tpl.description }}</div>
+                  }
+                  <div class="saved-report-meta">
+                    Click to create a report from this template
+                  </div>
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </mat-tab>
+    </mat-tab-group>
+  </mat-dialog-content>
+  <mat-dialog-actions align="end">
+    <button mat-button mat-dialog-close>Close</button>
+  </mat-dialog-actions>
+</ng-template>
+
+<!-- Parameter Prompt Dialog Template -->
+<ng-template #paramPromptTpl>
+  <h2 mat-dialog-title>Report Parameters</h2>
+  <mat-dialog-content>
+    <p class="param-prompt-hint">Enter values for report parameters before running.</p>
+    @for (param of parameters(); track param.paramId) {
+      <mat-form-field class="dialog-full-width">
+        <mat-label>{{ param.label || param.paramId }}</mat-label>
+        <input matInput
+               [ngModel]="paramPromptValues()[param.paramId]"
+               (ngModelChange)="setParamPromptValue(param.paramId, $event)"
+               [placeholder]="param.dataType" />
+        <mat-hint>Type: {{ param.dataType }}</mat-hint>
+      </mat-form-field>
+    }
+  </mat-dialog-content>
+  <mat-dialog-actions align="end">
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-flat-button color="primary" [mat-dialog-close]="'run'">Run</button>
+  </mat-dialog-actions>
+</ng-template>
